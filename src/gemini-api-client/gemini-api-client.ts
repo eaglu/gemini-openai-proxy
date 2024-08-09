@@ -1,16 +1,37 @@
 import { EventSourceParserStream } from "eventsource-parser/stream"
 import type { ApiParam, GeminiModel } from "../utils.ts"
 import { GoogleGenerativeAIError } from "./errors.ts"
-import { addHelpers } from "./response-helper.ts"
-import type { GenerateContentRequest, GenerateContentResponse, GenerateContentResult, RequestOptions } from "./types.ts"
+import type {
+  EmbedContentRequest,
+  EmbedContentResponse,
+  GenerateContentRequest,
+  GenerateContentResponse,
+  RequestOptions,
+} from "./types.ts"
 
-export async function* generateContent(
+interface Task {
+  generateContent: {
+    request: GenerateContentRequest
+    response: GenerateContentResponse
+  }
+  streamGenerateContent: {
+    request: GenerateContentRequest
+    response: GenerateContentResponse
+  }
+  embedContent: {
+    request: EmbedContentRequest
+    response: EmbedContentResponse
+  }
+}
+
+export async function* generateContent<T extends keyof Task>(
+  task: T,
   apiParam: ApiParam,
   model: GeminiModel,
-  params: GenerateContentRequest,
+  params: Task[T]["request"],
   requestOptions?: RequestOptions,
-): AsyncGenerator<GenerateContentResult> {
-  const url = new RequestUrl(model, Task.STREAM_GENERATE_CONTENT, true, apiParam)
+): AsyncGenerator<Task[T]["response"]> {
+  const url = new RequestUrl(model, task, true, apiParam)
   const response = await makeRequest(url, JSON.stringify(params), requestOptions)
   const body = response.body
   if (body == null) {
@@ -18,20 +39,9 @@ export async function* generateContent(
   }
 
   for await (const event of body.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream())) {
-    const responseJson: GenerateContentResponse = JSON.parse(event.data)
-    const enhancedResponse = addHelpers(responseJson)
-    yield {
-      response: enhancedResponse,
-    }
+    const responseJson: Task[T]["response"] = JSON.parse(event.data)
+    yield responseJson
   }
-}
-export enum TaskType {
-  TASK_TYPE_UNSPECIFIED = "TASK_TYPE_UNSPECIFIED",
-  RETRIEVAL_QUERY = "RETRIEVAL_QUERY",
-  RETRIEVAL_DOCUMENT = "RETRIEVAL_DOCUMENT",
-  SEMANTIC_SIMILARITY = "SEMANTIC_SIMILARITY",
-  CLASSIFICATION = "CLASSIFICATION",
-  CLUSTERING = "CLUSTERING",
 }
 
 async function makeRequest(url: RequestUrl, body: string, requestOptions?: RequestOptions): Promise<Response> {
@@ -70,12 +80,12 @@ async function makeRequest(url: RequestUrl, body: string, requestOptions?: Reque
 export class RequestUrl {
   constructor(
     public model: GeminiModel,
-    public task: Task,
+    public task: keyof Task,
     public stream: boolean,
     public apiParam: ApiParam,
   ) {}
   toURL(): URL {
-    const api_version = API_VERSION.v1beta
+    const api_version: API_VERSION = "v1beta"
     const url = new URL(`${BASE_URL}/${api_version}/models/${this.model}:${this.task}`)
     url.searchParams.append("key", this.apiParam.apikey)
     if (this.stream) {
@@ -85,20 +95,9 @@ export class RequestUrl {
   }
 }
 
-enum Task {
-  GENERATE_CONTENT = "generateContent",
-  STREAM_GENERATE_CONTENT = "streamGenerateContent",
-  COUNT_TOKENS = "countTokens",
-  EMBED_CONTENT = "embedContent",
-  BATCH_EMBED_CONTENTS = "batchEmbedContents",
-}
-
 const BASE_URL = "https://generativelanguage.googleapis.com"
 
-enum API_VERSION {
-  v1beta = "v1beta",
-  v1 = "v1",
-}
+type API_VERSION = "v1beta" | "v1"
 
 /**
  * Generates the request options to be passed to the fetch API.
